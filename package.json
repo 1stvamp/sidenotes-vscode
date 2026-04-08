@@ -1,0 +1,76 @@
+{
+  "name": "rails-sidenotes",
+  "displayName": "Rails Sidenotes",
+  "description": "Displays schema annotations from the sidenotes Ruby gem as CodeLens, hover info, and inline decorations in Rails model files.",
+  "version": "0.1.0",
+  "publisher": "wesmason",
+  "license": "MIT",
+  "repository": "https://github.com/1stvamp/sidenotes-vscode",
+    "type": "git",
+    "url": "https://github.com/wesmason/rails-sidenotes-vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "rails",
+    "ruby",
+    "schema",
+    "annotations",
+    "sidenotes"
+  ],
+  "activationEvents": [
+    "workspaceContains:.annotations",
+    "onLanguage:ruby"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "railsSidenotes.regenerate",
+        "title": "Rails Sidenotes: Regenerate"
+      },
+      {
+        "command": "railsSidenotes.showDetail",
+        "title": "Rails Sidenotes: Show Schema Detail"
+      }
+    ],
+    "configuration": {
+      "title": "Rails Sidenotes",
+      "properties": {
+        "railsSidenotes.annotationsDir": {
+          "type": "string",
+          "default": ".annotations",
+          "description": "Directory containing annotation YAML files, relative to workspace root."
+        },
+        "railsSidenotes.showInlineDecorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline type annotations next to attribute references."
+        },
+        "railsSidenotes.showCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CodeLens above class definitions with schema summary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.0"
+  }
+}
