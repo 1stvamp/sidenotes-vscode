@@ -30,9 +30,11 @@ jobs:
       - run: npm run compile
 
       - name: Package extension
-        run: npx @vscode/vsce package 
+        run: npx @vscode/vsce package
+
       - name: Publish to VS Code Marketplace
-        run: npx @vscode/vsce publish         env:
+        run: npx @vscode/vsce publish
+        env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX Registry
