@@ -1,21 +1,16 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as YAML from 'yaml';
 import { ModelAnnotation } from './types';
-import { modelToAnnotationPath, getAnnotationsDir } from './fileMapper';
+import { modelToAnnotationPath, annotationToModelPath, getAnnotationsDir } from './fileMapper';
 
-/**
- * Central store for parsed annotation data.
- * Caches parsed YAML and provides lookup by model file URI.
- * Watches for file changes and invalidates cache accordingly.
- */
 export class AnnotationStore implements vscode.Disposable {
   private cache: Map<string, ModelAnnotation> = new Map();
+  // Reverse map: annotation URI string → model URI string for O(1) cache invalidation
+  private reverseMap: Map<string, string> = new Map();
   private watcher: vscode.FileSystemWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
 
   private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri | undefined>();
-  /** Fires when annotation data changes. Uri is the model file, or undefined for bulk refresh. */
   public readonly onDidChange = this._onDidChange.event;
 
   constructor() {
@@ -23,7 +18,6 @@ export class AnnotationStore implements vscode.Disposable {
   }
 
   private setupWatcher(): void {
-    // Watch for changes in all .annotations/**/*.yml files across workspaces
     this.watcher = vscode.workspace.createFileSystemWatcher('**/.annotations/**/*.yml');
 
     this.watcher.onDidChange((uri) => this.handleAnnotationChange(uri));
@@ -34,42 +28,53 @@ export class AnnotationStore implements vscode.Disposable {
   }
 
   private handleAnnotationChange(annotationUri: vscode.Uri): void {
-    // Invalidate the cache entry whose key matches this annotation file
-    for (const [key, _value] of this.cache) {
-      if (this.annotationUriForCacheKey(key)?.toString() === annotationUri.toString()) {
-        this.cache.delete(key);
-        this._onDidChange.fire(vscode.Uri.parse(key));
-        return;
-      }
+    const annotationKey = annotationUri.toString();
+    const modelKey = this.reverseMap.get(annotationKey);
+    if (modelKey) {
+      this.cache.delete(modelKey);
+      this.reverseMap.delete(annotationKey);
+      this._onDidChange.fire(vscode.Uri.parse(modelKey));
+    } else {
+      this._onDidChange.fire(undefined);
     }
-    // If not found in cache, fire a general refresh
-    this._onDidChange.fire(undefined);
   }
 
   private handleAnnotationDelete(annotationUri: vscode.Uri): void {
-    for (const [key, _value] of this.cache) {
-      if (this.annotationUriForCacheKey(key)?.toString() === annotationUri.toString()) {
-        this.cache.delete(key);
-        this._onDidChange.fire(vscode.Uri.parse(key));
-        return;
-      }
+    const annotationKey = annotationUri.toString();
+    const modelKey = this.reverseMap.get(annotationKey);
+    if (modelKey) {
+      this.cache.delete(modelKey);
+      this.reverseMap.delete(annotationKey);
+      this._onDidChange.fire(vscode.Uri.parse(modelKey));
     }
   }
 
-  private annotationUriForCacheKey(cacheKey: string): vscode.Uri | undefined {
-    const modelUri = vscode.Uri.parse(cacheKey);
+  public getAnnotation(modelUri: vscode.Uri): ModelAnnotation | undefined {
+    const cacheKey = modelUri.toString();
+
+    if (this.cache.has(cacheKey)) {
+      return this.cache.get(cacheKey);
+    }
+
+    // Synchronous fallback for providers that need immediate results.
+    // Prefer preload() for bulk loading at activation.
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(modelUri);
     if (!workspaceFolder) {
       return undefined;
     }
-    return modelToAnnotationPath(modelUri, workspaceFolder);
+
+    const annotationUri = modelToAnnotationPath(modelUri, workspaceFolder);
+    if (!annotationUri) {
+      return undefined;
+    }
+
+    return undefined;
   }
 
   /**
-   * Get annotation data for a given model file.
-   * Returns undefined if no annotation file exists.
+   * Async annotation fetch — loads from disk if not cached.
    */
-  public getAnnotation(modelUri: vscode.Uri): ModelAnnotation | undefined {
+  public async getAnnotationAsync(modelUri: vscode.Uri): Promise<ModelAnnotation | undefined> {
     const cacheKey = modelUri.toString();
 
     if (this.cache.has(cacheKey)) {
@@ -86,29 +91,25 @@ export class AnnotationStore implements vscode.Disposable {
       return undefined;
     }
 
-    const annotation = this.parseAnnotationFile(annotationUri);
+    const annotation = await this.parseAnnotationFile(annotationUri);
     if (annotation) {
       this.cache.set(cacheKey, annotation);
+      this.reverseMap.set(annotationUri.toString(), cacheKey);
     }
     return annotation;
   }
 
-  /**
-   * Parse a YAML annotation file into a ModelAnnotation.
-   */
-  private parseAnnotationFile(uri: vscode.Uri): ModelAnnotation | undefined {
+  private async parseAnnotationFile(uri: vscode.Uri): Promise<ModelAnnotation | undefined> {
     try {
-      if (!fs.existsSync(uri.fsPath)) {
-        return undefined;
-      }
-      const content = fs.readFileSync(uri.fsPath, 'utf-8');
+      const data = await vscode.workspace.fs.readFile(uri);
+      const content = Buffer.from(data).toString('utf-8');
       const parsed = YAML.parse(content);
 
       if (!parsed || typeof parsed !== 'object') {
         return undefined;
       }
 
-      const annotation: ModelAnnotation = {
+      return {
         table_name: parsed.table_name ?? '',
         primary_key: parsed.primary_key ?? 'id',
         columns: Array.isArray(parsed.columns)
@@ -145,16 +146,17 @@ export class AnnotationStore implements vscode.Disposable {
             }))
           : [],
       };
-
-      return annotation;
     } catch (error) {
+      if (error instanceof vscode.FileSystemError) {
+        return undefined;
+      }
       console.warn(`[Rails Sidenotes] Failed to parse annotation: ${uri.fsPath}`, error);
       return undefined;
     }
   }
 
   /**
-   * Preload all annotations from the workspace.
+   * Preload all annotations from the workspace into cache.
    */
   public async preload(): Promise<void> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -164,24 +166,36 @@ export class AnnotationStore implements vscode.Disposable {
 
     for (const folder of workspaceFolders) {
       const annotationsDir = getAnnotationsDir(folder);
-      if (!fs.existsSync(annotationsDir)) {
+      const pattern = new vscode.RelativePattern(annotationsDir, '**/*.yml');
+
+      let files: vscode.Uri[];
+      try {
+        files = await vscode.workspace.findFiles(pattern);
+      } catch {
         continue;
       }
 
-      const pattern = new vscode.RelativePattern(annotationsDir, '**/*.yml');
-      const files = await vscode.workspace.findFiles(pattern);
-
-      for (const _file of files) {
-        // Annotations are loaded on demand; this just warms the file list
+      for (const file of files) {
+        const modelUri = annotationToModelPath(file, folder);
+        if (!modelUri) {
+          continue;
+        }
+        const cacheKey = modelUri.toString();
+        if (this.cache.has(cacheKey)) {
+          continue;
+        }
+        const annotation = await this.parseAnnotationFile(file);
+        if (annotation) {
+          this.cache.set(cacheKey, annotation);
+          this.reverseMap.set(file.toString(), cacheKey);
+        }
       }
     }
   }
 
-  /**
-   * Clear all cached data.
-   */
   public clearCache(): void {
     this.cache.clear();
+    this.reverseMap.clear();
     this._onDidChange.fire(undefined);
   }
 

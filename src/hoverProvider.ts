@@ -2,41 +2,36 @@ import * as vscode from 'vscode';
 import { AnnotationStore } from './annotationStore';
 import { ModelAnnotation, ColumnInfo, IndexInfo, AssociationInfo } from './types';
 
-/**
- * Provides hover cards when hovering over the class name in a Ruby model file.
- * Displays the full schema including columns, indexes, and associations.
- */
 export class SidenotesHoverProvider implements vscode.HoverProvider {
   constructor(private store: AnnotationStore) {}
 
-  public provideHover(
+  public async provideHover(
     document: vscode.TextDocument,
     position: vscode.Position,
     _token: vscode.CancellationToken
-  ): vscode.Hover | undefined {
-    const annotation = this.store.getAnnotation(document.uri);
-    if (!annotation) {
-      return undefined;
-    }
-
+  ): Promise<vscode.Hover | undefined> {
     const wordRange = document.getWordRangeAtPosition(position, /[A-Z]\w+/);
     if (!wordRange) {
       return undefined;
     }
 
-    const word = document.getText(wordRange);
     const line = document.lineAt(position.line).text;
-
-    // Only show hover on class name in class definition line
     const classMatch = line.match(/^\s*class\s+([\w:]+)/);
     if (!classMatch) {
       return undefined;
     }
 
-    // Check if the hovered word is part of the class name (not the parent class)
+    // Only trigger on the class name itself, not the parent class
     const className = classMatch[1];
-    const simpleNames = className.split('::');
-    if (!simpleNames.includes(word)) {
+    const classNameStart = line.indexOf(className, line.indexOf('class') + 5);
+    const classNameEnd = classNameStart + className.length;
+    const wordStart = wordRange.start.character;
+    if (wordStart < classNameStart || wordStart >= classNameEnd) {
+      return undefined;
+    }
+
+    const annotation = await this.store.getAnnotationAsync(document.uri);
+    if (!annotation) {
       return undefined;
     }
 
@@ -52,7 +47,6 @@ export class SidenotesHoverProvider implements vscode.HoverProvider {
     md.appendMarkdown(`### $(database) ${annotation.table_name}\n\n`);
     md.appendMarkdown(`**Primary key:** \`${annotation.primary_key}\`\n\n`);
 
-    // Columns table
     if (annotation.columns.length > 0) {
       md.appendMarkdown(`#### Columns (${annotation.columns.length})\n\n`);
       md.appendMarkdown('| Column | Type | Nullable | Default |\n');
@@ -63,7 +57,6 @@ export class SidenotesHoverProvider implements vscode.HoverProvider {
       md.appendMarkdown('\n');
     }
 
-    // Indexes
     if (annotation.indexes.length > 0) {
       md.appendMarkdown(`#### Indexes (${annotation.indexes.length})\n\n`);
       for (const idx of annotation.indexes) {
@@ -72,7 +65,6 @@ export class SidenotesHoverProvider implements vscode.HoverProvider {
       md.appendMarkdown('\n');
     }
 
-    // Associations
     if (annotation.associations.length > 0) {
       md.appendMarkdown(`#### Associations (${annotation.associations.length})\n\n`);
       for (const assoc of annotation.associations) {

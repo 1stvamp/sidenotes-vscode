@@ -2,11 +2,6 @@ import * as vscode from 'vscode';
 import { AnnotationStore } from './annotationStore';
 import { ModelAnnotation } from './types';
 
-/**
- * Provides CodeLens above class definitions in Ruby model files.
- * Shows a summary like: "users: 15 columns, 3 indexes, 5 associations"
- * Clicking opens the detail panel.
- */
 export class SidenotesCodeLensProvider implements vscode.CodeLensProvider {
   private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
   public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
@@ -15,16 +10,16 @@ export class SidenotesCodeLensProvider implements vscode.CodeLensProvider {
     store.onDidChange(() => this._onDidChangeCodeLenses.fire());
   }
 
-  public provideCodeLenses(
+  public async provideCodeLenses(
     document: vscode.TextDocument,
     _token: vscode.CancellationToken
-  ): vscode.CodeLens[] {
+  ): Promise<vscode.CodeLens[]> {
     const config = vscode.workspace.getConfiguration('railsSidenotes');
     if (!config.get<boolean>('showCodeLens', true)) {
       return [];
     }
 
-    const annotation = this.store.getAnnotation(document.uri);
+    const annotation = await this.store.getAnnotationAsync(document.uri);
     if (!annotation) {
       return [];
     }
@@ -47,18 +42,11 @@ export class SidenotesCodeLensProvider implements vscode.CodeLensProvider {
     return [lens];
   }
 
-  /**
-   * Find the line number of the first class definition in the document.
-   * Matches patterns like:
-   *   class User < ApplicationRecord
-   *   class Admin::Setting < ApplicationRecord
-   */
   private findClassDefinitionLine(document: vscode.TextDocument): number {
     const classPattern = /^\s*class\s+[\w:]+\s*(<\s*[\w:]+)?/;
 
     for (let i = 0; i < document.lineCount; i++) {
-      const line = document.lineAt(i).text;
-      if (classPattern.test(line)) {
+      if (classPattern.test(document.lineAt(i).text)) {
         return i;
       }
     }

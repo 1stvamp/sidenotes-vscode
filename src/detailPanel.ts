@@ -3,20 +3,17 @@ import { AnnotationStore } from './annotationStore';
 import { ModelAnnotation, ColumnInfo, IndexInfo, AssociationInfo } from './types';
 import { extractModelName } from './fileMapper';
 
-/**
- * Manages a Webview panel that displays full schema details for a model.
- */
 export class DetailPanel {
   private static currentPanel: DetailPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
 
-  public static show(
+  public static async show(
     modelUri: vscode.Uri,
     store: AnnotationStore,
     extensionUri: vscode.Uri
-  ): void {
-    const annotation = store.getAnnotation(modelUri);
+  ): Promise<void> {
+    const annotation = await store.getAnnotationAsync(modelUri);
     if (!annotation) {
       vscode.window.showWarningMessage('No annotation data found for this model.');
       return;
@@ -80,6 +77,7 @@ export class DetailPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Schema: ${this.escape(modelName)}</title>
   <style>
