@@ -1,12 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as path from 'path';
+import * as fs from 'fs';
 
-// Mock vscode module before importing fileMapper
+let mockRailsRoot = '';
+
 vi.mock('vscode', () => ({
   workspace: {
     getConfiguration: () => ({
-      get: (_key: string, defaultVal: string) => defaultVal,
+      get: (key: string, defaultVal: string) => {
+        if (key === 'railsRoot') { return mockRailsRoot || defaultVal; }
+        return defaultVal;
+      },
     }),
   },
   Uri: {
@@ -14,7 +19,17 @@ vi.mock('vscode', () => ({
   },
 }));
 
-import { modelToAnnotationPath, annotationToModelPath, extractModelName } from './fileMapper';
+// Mock fs.existsSync and fs.readdirSync for auto-detection tests
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof fs>('fs');
+  return {
+    ...actual,
+    existsSync: vi.fn(() => false),
+    readdirSync: vi.fn(() => []),
+  };
+});
+
+import { modelToAnnotationPath, annotationToModelPath, extractModelName, clearRailsRootCache } from './fileMapper';
 
 function makeUri(fsPath: string) {
   return { fsPath, toString: () => `file://${fsPath}` };
@@ -24,10 +39,17 @@ function makeWorkspaceFolder(rootPath: string) {
   return { uri: makeUri(rootPath) } as any;
 }
 
+beforeEach(() => {
+  mockRailsRoot = '';
+  clearRailsRootCache();
+  vi.mocked(fs.existsSync).mockReturnValue(false);
+  vi.mocked(fs.readdirSync).mockReturnValue([]);
+});
+
 describe('modelToAnnotationPath', () => {
   const ws = makeWorkspaceFolder('/project');
 
-  it('maps a model file to its annotation', () => {
+  it('maps a model file to its annotation (no auto-detect)', () => {
     const result = modelToAnnotationPath(makeUri('/project/app/models/user.rb') as any, ws);
     expect(result?.fsPath).toBe(path.join('/project', '.annotations', 'user.yml'));
   });
@@ -42,9 +64,29 @@ describe('modelToAnnotationPath', () => {
     expect(result).toBeUndefined();
   });
 
-  it('returns undefined for files outside workspace', () => {
-    const result = modelToAnnotationPath(makeUri('/other/app/models/user.rb') as any, ws);
-    expect(result).toBeUndefined();
+  it('maps correctly with railsRoot config', () => {
+    mockRailsRoot = 'pinpoint';
+    const result = modelToAnnotationPath(makeUri('/project/pinpoint/app/models/user.rb') as any, ws);
+    expect(result?.fsPath).toBe(path.join('/project', 'pinpoint', '.annotations', 'user.yml'));
+  });
+
+  it('auto-detects Rails root in subdirectory', () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      const s = p.toString();
+      // Workspace root doesn't have annotations
+      if (s === path.join('/project', '.annotations')) { return false; }
+      if (s === path.join('/project', 'app', 'models')) { return false; }
+      // But pinpoint/ subdirectory does
+      if (s === path.join('/project', 'pinpoint', '.annotations')) { return true; }
+      if (s === path.join('/project', 'pinpoint', 'app', 'models')) { return true; }
+      return false;
+    });
+    vi.mocked(fs.readdirSync).mockReturnValue([
+      { name: 'pinpoint', isDirectory: () => true } as any,
+    ] as any);
+
+    const result = modelToAnnotationPath(makeUri('/project/pinpoint/app/models/user.rb') as any, ws);
+    expect(result?.fsPath).toBe(path.join('/project', 'pinpoint', '.annotations', 'user.yml'));
   });
 });
 
@@ -65,6 +107,12 @@ describe('annotationToModelPath', () => {
     const result = annotationToModelPath(makeUri('/project/other/user.yml') as any, ws);
     expect(result).toBeUndefined();
   });
+
+  it('maps correctly with railsRoot config', () => {
+    mockRailsRoot = 'pinpoint';
+    const result = annotationToModelPath(makeUri(path.join('/project', 'pinpoint', '.annotations', 'user.yml')) as any, ws);
+    expect(result?.fsPath).toBe(path.join('/project', 'pinpoint', 'app', 'models', 'user.rb'));
+  });
 });
 
 describe('extractModelName', () => {
@@ -80,5 +128,10 @@ describe('extractModelName', () => {
 
   it('returns undefined for non-model files', () => {
     expect(extractModelName(makeUri('/project/lib/user.rb') as any, ws)).toBeUndefined();
+  });
+
+  it('extracts model name with railsRoot config', () => {
+    mockRailsRoot = 'pinpoint';
+    expect(extractModelName(makeUri('/project/pinpoint/app/models/user.rb') as any, ws)).toBe('user');
   });
 });

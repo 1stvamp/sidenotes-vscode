@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as YAML from 'yaml';
 import { ModelAnnotation } from './types';
-import { modelToAnnotationPath, annotationToModelPath, getAnnotationsDir } from './fileMapper';
+import { modelToAnnotationPath, annotationToModelPath, getAnnotationsDir, clearRailsRootCache } from './fileMapper';
 
 export class AnnotationStore implements vscode.Disposable {
   private cache: Map<string, ModelAnnotation> = new Map();
@@ -109,11 +109,25 @@ export class AnnotationStore implements vscode.Disposable {
         return undefined;
       }
 
+      // The sidenotes gem wraps data under a model name key with a metadata sub-key:
+      //   ModelName:
+      //     metadata: { table_name, primary_key, ... }
+      //     columns: [...]
+      // Also support flat format (table_name/columns at root level).
+      let root = parsed;
+      if (!parsed.table_name && !parsed.columns) {
+        const keys = Object.keys(parsed);
+        if (keys.length === 1 && typeof parsed[keys[0]] === 'object') {
+          root = parsed[keys[0]];
+        }
+      }
+      const metadata = root.metadata ?? root;
+
       return {
-        table_name: parsed.table_name ?? '',
-        primary_key: parsed.primary_key ?? 'id',
-        columns: Array.isArray(parsed.columns)
-          ? parsed.columns.map((c: Record<string, unknown>) => ({
+        table_name: metadata.table_name ?? '',
+        primary_key: metadata.primary_key ?? 'id',
+        columns: Array.isArray(root.columns)
+          ? root.columns.map((c: Record<string, unknown>) => ({
               name: String(c.name ?? ''),
               type: String(c.type ?? 'unknown'),
               nullable: Boolean(c.nullable),
@@ -124,8 +138,8 @@ export class AnnotationStore implements vscode.Disposable {
               comment: typeof c.comment === 'string' ? c.comment : undefined,
             }))
           : [],
-        indexes: Array.isArray(parsed.indexes)
-          ? parsed.indexes.map((i: Record<string, unknown>) => ({
+        indexes: Array.isArray(root.indexes)
+          ? root.indexes.map((i: Record<string, unknown>) => ({
               name: String(i.name ?? ''),
               columns: Array.isArray(i.columns) ? i.columns.map(String) : [],
               unique: Boolean(i.unique),
@@ -134,8 +148,8 @@ export class AnnotationStore implements vscode.Disposable {
               comment: typeof i.comment === 'string' ? i.comment : undefined,
             }))
           : [],
-        associations: Array.isArray(parsed.associations)
-          ? parsed.associations.map((a: Record<string, unknown>) => ({
+        associations: Array.isArray(root.associations)
+          ? root.associations.map((a: Record<string, unknown>) => ({
               type: String(a.type ?? '') as 'belongs_to' | 'has_one' | 'has_many' | 'has_and_belongs_to_many',
               name: String(a.name ?? ''),
               class_name: String(a.class_name ?? ''),
@@ -196,6 +210,7 @@ export class AnnotationStore implements vscode.Disposable {
   public clearCache(): void {
     this.cache.clear();
     this.reverseMap.clear();
+    clearRailsRootCache();
     this._onDidChange.fire(undefined);
   }
 

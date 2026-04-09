@@ -2,7 +2,7 @@
   "name": "rails-sidenotes",
   "displayName": "Rails Sidenotes",
   "description": "Displays schema annotations from the sidenotes Ruby gem as CodeLens, hover info, and inline decorations in Rails model files.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "wesmason",
   "license": "MIT",
   "repository": {
@@ -41,10 +41,15 @@
     "configuration": {
       "title": "Rails Sidenotes",
       "properties": {
+        "railsSidenotes.railsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Rails application root, relative to workspace root. Leave empty if the workspace root is the Rails root."
+        },
         "railsSidenotes.annotationsDir": {
           "type": "string",
           "default": ".annotations",
-          "description": "Directory containing annotation YAML files, relative to workspace root."
+          "description": "Directory containing annotation YAML files, relative to the Rails root."
         },
         "railsSidenotes.showInlineDecorations": {
           "type": "boolean",
@@ -60,8 +65,9 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
+    "bundle": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "test": "vitest run",
@@ -74,6 +80,7 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "esbuild": "^0.28.0",
     "eslint": "^8.56.0",
     "typescript": "^5.3.0",
     "vitest": "^4.1.3"
